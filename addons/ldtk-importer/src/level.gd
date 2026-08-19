@@ -12,7 +12,8 @@ static func build_levels(
 		world_data: Dictionary,
 		definitions: Dictionary,
 		base_dir: String,
-		external_levels: bool
+		external_levels: bool,
+		reused_levels: Dictionary = {}
 ) -> Array[LDTKLevel]:
 
 	Util.timer_start(Util.DebugTime.GENERAL)
@@ -46,7 +47,11 @@ static func build_levels(
 		var level_data
 		var position: Vector2i = level_positions[level_index]
 		level_data = world_data.levels[level_index]
+		var level_iid: String = level_data.iid
 
+		if reused_levels.has(level_iid):
+			levels.append(reused_levels[level_iid])
+			continue
 		if external_levels:
 			level_data = LevelUtil.get_external_level(level_data, base_dir)
 

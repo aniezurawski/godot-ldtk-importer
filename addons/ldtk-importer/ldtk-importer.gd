@@ -15,6 +15,8 @@ const Level = preload("src/level.gd")
 const Tileset = preload("src/tileset.gd")
 const DefinitionUtil = preload("src/util/definition_util.gd")
 
+const LEVEL_HASH_CACHE_VERSION := 1
+
 #region EditorImportPlugin Overrides
 
 #region Simple
@@ -51,6 +53,8 @@ func _get_preset_name(index):
 
 func _get_option_visibility(path, option_name, options):
 	match option_name:
+		"skip_unchanged_levels":
+			return options.get("pack_levels", true)
 		_:
 			return true
 	return true
@@ -74,6 +78,11 @@ func _get_import_options(path, index):
 		{
 			# Save LDTKLevels as PackedScenes.
 			"name": "pack_levels",
+			"default_value": true,
+		},
+		{
+			# Reuse PackedScenes when their imported level data has not changed.
+			"name": "skip_unchanged_levels",
 			"default_value": true,
 		},
 		{
@@ -190,6 +199,9 @@ func _import(
 	var base_dir := source_file.get_base_dir() + "/"
 	var file_name := source_file.get_file()
 	var world_name := file_name.split(".")[0]
+	var import_cache_path := save_path + ".level_hashes.cfg"
+	var import_cache := load_import_cache(import_cache_path)
+	var main_source_hash := FileAccess.get_file_as_string(source_file).sha256_text()
 
 	Util.timer_start(Util.DebugTime.LOAD)
 	var world_data := Util.parse_file(source_file)
@@ -233,11 +245,35 @@ func _import(
 		world = World.create_multi_world(world_name, world_iid, world_nodes)
 	else:
 		if Util.options.verbose_output: Util.print("block", "Levels")
-		var levels := Level.build_levels(world_data, definitions, base_dir, external_levels)
+		var levels_path := base_dir + 'levels/'
+		var skip_unchanged_levels: bool = options.pack_levels and options.skip_unchanged_levels
+		var level_hashes := get_level_hashes(world_data, base_dir, external_levels)
+		var previous_level_hashes: Dictionary = import_cache.level_hashes
+		var can_reuse_levels: bool = (
+			skip_unchanged_levels
+			and import_cache.main_source_hash == main_source_hash
+		)
+		var reusable_level_hashes: Dictionary = previous_level_hashes if can_reuse_levels else {}
+		var reused_levels := (
+			load_unchanged_levels(
+				world_data,
+				level_hashes,
+				reusable_level_hashes,
+				levels_path
+			)
+			if can_reuse_levels
+			else {}
+		)
+		var levels := Level.build_levels(
+			world_data,
+			definitions,
+			base_dir,
+			external_levels,
+			reused_levels
+		)
 
 		# Save Levels (after Level Post-Import)
 		if (Util.options.pack_levels):
-			var levels_path := base_dir + 'levels/'
 			var directory = DirAccess.open(base_dir)
 			if not directory.dir_exists(levels_path):
 				directory.make_dir(levels_path)
@@ -246,7 +282,19 @@ func _import(
 			#if (Util.options.verbose_output): Util.print("block", "References")
 			if (Util.options.verbose_output): Util.print("block", "Save Levels")
 			Util.handle_references()
-			var packed_levels = save_levels(levels, levels_path, gen_files)
+			var packed_levels = save_levels(
+				levels,
+				levels_path,
+				gen_files,
+				reused_levels
+			)
+			if skip_unchanged_levels:
+				save_import_cache(
+					import_cache_path,
+					main_source_hash,
+					level_hashes
+				)
+				gen_files.append(import_cache_path)
 
 			if (Util.options.verbose_output): Util.print("block", "Save World")
 			world = World.create_world(world_name, world_iid, packed_levels, base_dir)
@@ -294,7 +342,8 @@ func save_world(
 func save_levels(
 		levels: Array[LDTKLevel],
 		save_path: String,
-		gen_files: Array[String]
+		gen_files: Array[String],
+		reused_levels: Dictionary
 ) -> Array[LDTKLevel]:
 	Util.timer_start(Util.DebugTime.SAVE)
 	var packed_levels: Array[LDTKLevel] = []
@@ -304,9 +353,14 @@ func save_levels(
 	Util.print("item_save", "Saving Levels: [color=#fe8019]%s[/color]" % [level_names], 1)
 
 	for level in levels:
+		if reused_levels.has(level.iid):
+			gen_files.append(level.scene_file_path)
+			packed_levels.append(level)
+			continue
+
 		for child in level.get_children():
 			Util.recursive_set_owner(child, level)
-		var level_path = save_level(level, save_path, gen_files)
+		var level_path := save_level(level, save_path, gen_files)
 		var packed_level = load(level_path).instantiate()
 		packed_levels.append(packed_level)
 
@@ -325,5 +379,73 @@ func save_level(
 	var err = ResourceSaver.save(packed_level, level_path)
 	if err == OK:
 		gen_files.append(level_path)
+	else:
+		push_error("Failed to save level '%s': %s" % [level_path, error_string(err)])
 
 	return level_path
+
+func get_level_hashes(
+		world_data: Dictionary,
+		base_dir: String,
+		external_levels: bool
+) -> Dictionary:
+	var hashes := {}
+
+	for level_header in world_data.levels:
+		if external_levels:
+			var level_path: String = base_dir + level_header.externalRelPath
+			hashes[level_header.iid] = FileAccess.get_file_as_string(level_path).sha256_text()
+		else:
+			hashes[level_header.iid] = str(LEVEL_HASH_CACHE_VERSION)
+
+	return hashes
+
+func load_import_cache(cache_path: String) -> Dictionary:
+	var cache := ConfigFile.new()
+	if cache.load(cache_path) != OK:
+		return {
+			"main_source_hash": "",
+			"level_hashes": {},
+		}
+
+	var hashes := {}
+	for level_iid in cache.get_section_keys("levels"):
+		hashes[level_iid] = cache.get_value("levels", level_iid, "")
+	return {
+		"main_source_hash": cache.get_value("metadata", "main_source_hash", ""),
+		"level_hashes": hashes,
+	}
+
+func save_import_cache(
+		cache_path: String,
+		main_source_hash: String,
+		level_hashes: Dictionary
+) -> void:
+	var cache := ConfigFile.new()
+	cache.set_value("metadata", "main_source_hash", main_source_hash)
+	for level_iid in level_hashes:
+		cache.set_value("levels", level_iid, level_hashes[level_iid])
+	cache.save(cache_path)
+
+func load_unchanged_levels(
+		world_data: Dictionary,
+		level_hashes: Dictionary,
+		previous_level_hashes: Dictionary,
+		levels_path: String
+) -> Dictionary:
+	var levels := {}
+	for level_header in world_data.levels:
+		var level_iid: String = level_header.iid
+		if previous_level_hashes.get(level_iid, "") != level_hashes[level_iid]:
+			continue
+
+		var level_path := "%s%s.%s" % [
+			levels_path,
+			level_header.identifier,
+			_get_save_extension(),
+		]
+		var packed_scene: PackedScene = load(level_path) if FileAccess.file_exists(level_path) else null
+		if packed_scene != null:
+			levels[level_iid] = packed_scene.instantiate()
+
+	return levels
