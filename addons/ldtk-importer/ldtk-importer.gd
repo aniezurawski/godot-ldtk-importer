@@ -395,7 +395,12 @@ func save_levels(
 		for child in level.get_children():
 			Util.recursive_set_owner(child, level)
 		var level_path := save_level(level, save_path, gen_files)
-		var packed_level = load(level_path).instantiate()
+		var packed_scene := ResourceLoader.load(
+			level_path,
+			"PackedScene",
+			ResourceLoader.CACHE_MODE_REPLACE
+		) as PackedScene
+		var packed_level := packed_scene.instantiate()
 		packed_levels.append(packed_level)
 
 	Util.timer_finish("%s Levels Saved" % [levels.size()], 1)
