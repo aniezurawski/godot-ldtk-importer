@@ -7,7 +7,8 @@ static func create_world(
 		name: String,
 		iid: String,
 		levels: Array,
-		base_dir: String
+		base_dir: String,
+		generated_import_paths: Array[String]
 ) -> LDTKWorld:
 
 	Util.timer_start(Util.DebugTime.GENERAL)
@@ -66,7 +67,11 @@ static func create_world(
 
 	# Post-Import
 	if (Util.options.world_post_import):
-		world = PostImport.run_world_post_import(world, Util.options.world_post_import)
+		world = PostImport.run_world_post_import(
+			world,
+			Util.options.world_post_import,
+			generated_import_paths
+		)
 
 	return world
 

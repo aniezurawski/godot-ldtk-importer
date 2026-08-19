@@ -232,6 +232,7 @@ func _import(
 
 	# Detect Multi-Worlds
 	var world_iid: String = world_data.iid
+	var generated_import_paths: Array[String] = []
 
 	var world: LDTKWorld
 	if world_data.worldLayout == null:
@@ -242,7 +243,13 @@ func _import(
 			var world_instance_name: String = world_instance.identifier
 			var world_instance_iid: String = world_instance.iid
 			var levels := Level.build_levels(world_instance, definitions, base_dir, external_levels)
-			var world_node := World.create_world(world_instance_name, world_instance_iid, levels, base_dir)
+			var world_node := World.create_world(
+				world_instance_name,
+				world_instance_iid,
+				levels,
+				base_dir,
+				generated_import_paths
+			)
 			world_nodes.append(world_node)
 
 		world = World.create_multi_world(world_name, world_iid, world_nodes)
@@ -300,12 +307,36 @@ func _import(
 				gen_files.append(import_cache_path)
 
 			if (Util.options.verbose_output): Util.print("block", "Save World")
-			world = World.create_world(world_name, world_iid, packed_levels, base_dir)
+			world = World.create_world(
+				world_name,
+				world_iid,
+				packed_levels,
+				base_dir,
+				generated_import_paths
+			)
 		else:
 			if (Util.options.verbose_output): Util.print("block", "Save World")
-			world = World.create_world(world_name, world_iid, levels, base_dir)
+			world = World.create_world(
+				world_name,
+				world_iid,
+				levels,
+				base_dir,
+				generated_import_paths
+			)
 
 			Util.handle_references()
+
+	for generated_path in generated_import_paths:
+		var generated_import_error := append_import_external_resource(generated_path)
+		if generated_import_error != OK:
+			push_error(
+				"Failed to import post-import generated resource '%s': %s" % [
+					generated_path,
+					error_string(generated_import_error),
+				]
+			)
+			return generated_import_error
+		gen_files.append(generated_path)
 
 	# Save World as PackedScene
 	Util.timer_start(Util.DebugTime.SAVE)
