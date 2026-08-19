@@ -1,6 +1,8 @@
 @tool
 extends EditorImportPlugin
 
+signal world_parsed(world_path: String, world_data: Dictionary)
+
 const LDTK_LATEST_VERSION = "1.5.3"
 
 enum Presets {DEFAULT}
@@ -213,6 +215,7 @@ func _import(
 		Util.print("item_ok", "LDTK VERSION (%s) OK" % [world_data.jsonVersion])
 	else:
 		return ERR_PARSE_ERROR
+	world_parsed.emit(source_file, world_data)
 
 	Util.timer_start(Util.DebugTime.GENERAL)
 	var definitions := DefinitionUtil.build_definitions(world_data)
