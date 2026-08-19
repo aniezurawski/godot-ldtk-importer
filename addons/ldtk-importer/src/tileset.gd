@@ -59,6 +59,10 @@ static func build_tilesets(
 		var tileset: TileSet = tilesets[id]
 		var size: int = tileset.tile_size.x
 
+		if Util.options.tileset_custom_data:
+			clear_custom_data(tileset, "LDTK Custom")
+			clear_custom_data(tileset, "LDTK Custom Enum")
+
 		for uid in tileset_sources.keys():
 			var source: TileSetAtlasSource = tileset_sources[uid]
 			if source == null: continue
@@ -210,7 +214,6 @@ static func add_tileset_custom_data(
 
 	var customData: Array = definition.customData
 	var custom_name: String = "LDTK Custom"
-	clear_custom_data(tileset, custom_name)
 
 	if not customData.is_empty():
 		ensure_custom_layer(tileset, custom_name)
@@ -221,7 +224,6 @@ static func add_tileset_custom_data(
 				tile_data.set_custom_data(custom_name, entry.data)
 
 	var custom_enum_name: String = "LDTK Custom Enum"
-	clear_custom_data(tileset, custom_enum_name)
 
 	var enumTags: Array = definition.enumTags
 	if not enumTags.is_empty():
