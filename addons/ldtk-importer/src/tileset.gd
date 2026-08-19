@@ -6,6 +6,9 @@ const LevelUtil = preload("util/level-util.gd")
 const FieldUtil = preload("util/field-util.gd")
 const PostImport = preload("post-import.gd")
 
+const TILESET_MAIN_SOURCE_HASH_META := "_ldtk_main_source_hash"
+const TILESET_CACHE_SOURCES_META := "_ldtk_import_sources"
+
 enum AtlasTextureType {CompressedTexture2D, CanvasTexture}
 enum TilesetSaveExtension {
 	RES,
@@ -18,9 +21,25 @@ static func get_tileset_save_extension() -> String:
 static func build_tilesets(
 		definitions: Dictionary,
 		base_dir: String,
-		tileset_overrides: Dictionary
+		tileset_overrides: Dictionary,
+		main_source_hash: String
 ) -> Array:
 	Util.timer_start(Util.DebugTime.TILES)
+	if not Util.options.force_tileset_reimport:
+		var cache: Dictionary = load_tileset_cache(
+			definitions,
+			base_dir,
+			tileset_overrides,
+			main_source_hash
+		)
+		if not cache.is_empty():
+			Util.tilesets = cache.tilesets
+			for uid in cache.sources:
+				var source: TileSetAtlasSource = cache.sources[uid]
+				Util.add_tileset_reference(int(uid), source)
+			Util.timer_finish("Tilesets Reused", 1)
+			return cache.files
+
 	var tilesets := {}
 	var tileset_sources := {}
 
@@ -91,6 +110,10 @@ static func build_tilesets(
 	if (Util.options.tileset_post_import):
 		tilesets = PostImport.run_tileset_post_import(tilesets, Util.options.tileset_post_import)
 
+	for tileset: TileSet in tilesets.values():
+		tileset.set_meta(TILESET_MAIN_SOURCE_HASH_META, main_source_hash)
+		tileset.set_meta(TILESET_CACHE_SOURCES_META, tileset_sources)
+
 	# Store tilesets in Util
 	Util.tilesets = tilesets
 
@@ -110,13 +133,100 @@ static func build_tilesets(
 
 	return files.values()
 
-static func get_tileset(tile_size: int,base_dir: String) -> TileSet:
+static func load_tileset_cache(
+		definitions: Dictionary,
+		base_dir: String,
+		tileset_overrides: Dictionary,
+		main_source_hash: String
+) -> Dictionary:
+	var tilesets: Dictionary = {}
+	var files: Array[String] = []
+	var sources: Dictionary = {}
+	for uid in definitions.layers:
+		var grid_size: int = definitions.layers[uid].gridSize
+		if tilesets.has(grid_size):
+			continue
+
+		var path := get_tileset_path(grid_size, base_dir)
+		if not ResourceLoader.exists(path):
+			return {}
+
+		var resource := ResourceLoader.load(path)
+		if not (resource is TileSet):
+			return {}
+		var tileset := resource as TileSet
+		if tileset.get_meta(TILESET_MAIN_SOURCE_HASH_META, "") != main_source_hash:
+			return {}
+
+		var cached_sources_variant: Variant = tileset.get_meta(TILESET_CACHE_SOURCES_META, null)
+		if not (cached_sources_variant is Dictionary):
+			return {}
+		var cached_sources: Dictionary = cached_sources_variant
+		if sources.is_empty():
+			sources = cached_sources
+
+		tilesets[grid_size] = tileset
+		files.append(path)
+
+	if tilesets.is_empty() or sources.is_empty():
+		return {}
+
+	for grid_size in tilesets:
+		var tileset: TileSet = tilesets[grid_size]
+		for uid in definitions.tilesets:
+			var definition: Dictionary = definitions.tilesets[uid]
+			if not sources.has(uid):
+				return {}
+
+			var source_variant: Variant = sources[uid]
+			if source_variant == null:
+				if definition.relPath != null:
+					return {}
+				continue
+			if not (source_variant is TileSetAtlasSource):
+				return {}
+
+			var has_override: bool = (
+				tileset_overrides.has(grid_size)
+				and tileset_overrides[grid_size].has(int(uid))
+			)
+			if (
+				(definition.gridSize == grid_size or has_override)
+				and not tileset.has_source(uid)
+			):
+				return {}
+		if Util.options.integer_grid_tilesets:
+			for uid in definitions.layers:
+				var definition: Dictionary = definitions.layers[uid]
+				if (
+					definition.gridSize == grid_size
+					and definition.type == "IntGrid"
+					and not definition.intGridValues.is_empty()
+					and (
+						not sources.has(uid)
+						or not (sources[uid] is TileSetAtlasSource)
+						or not tileset.has_source(uid)
+					)
+				):
+					return {}
+
+	return {
+		"tilesets": tilesets,
+		"sources": sources,
+		"files": files,
+	}
+
+static func get_tileset_path(tile_size: int, base_dir: String) -> String:
 	var tileset_name := "tileset_%spx" % [str(tile_size)]
-	var path := "%stilesets/%s.%s" % [
+	return "%stilesets/%s.%s" % [
 		base_dir,
 		tileset_name,
-		get_tileset_save_extension()
+		get_tileset_save_extension(),
 	]
+
+static func get_tileset(tile_size: int,base_dir: String) -> TileSet:
+	var tileset_name := "tileset_%spx" % [str(tile_size)]
+	var path := get_tileset_path(tile_size, base_dir)
 
 	if not (Util.options.force_tileset_reimport):
 		if ResourceLoader.exists(path):

@@ -224,7 +224,12 @@ func _import(
 
 	# Build Tilesets and save as Resources
 	if Util.options.verbose_output: Util.print("block", "Tilesets")
-	var tileset_paths := Tileset.build_tilesets(definitions, base_dir, tileset_overrides)
+	var tileset_paths := Tileset.build_tilesets(
+		definitions,
+		base_dir,
+		tileset_overrides,
+		main_source_hash
+	)
 	gen_files.append_array(tileset_paths)
 
 	# Fetch EntityDef Tile textures
