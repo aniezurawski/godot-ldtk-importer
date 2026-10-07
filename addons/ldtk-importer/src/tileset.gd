@@ -22,10 +22,11 @@ static func build_tilesets(
 		definitions: Dictionary,
 		base_dir: String,
 		tileset_overrides: Dictionary,
-		main_source_hash: String
+		main_source_hash: String,
+		allow_cache_reuse: bool = true
 ) -> Array:
 	Util.timer_start(Util.DebugTime.TILES)
-	if not Util.options.force_tileset_reimport:
+	if allow_cache_reuse and not Util.options.force_tileset_reimport:
 		var cache: Dictionary = load_tileset_cache(
 			definitions,
 			base_dir,
@@ -109,6 +110,8 @@ static func build_tilesets(
 	# Post-Import
 	if (Util.options.tileset_post_import):
 		tilesets = PostImport.run_tileset_post_import(tilesets, Util.options.tileset_post_import)
+		if Util.import_context.error != OK:
+			return []
 
 	for tileset: TileSet in tilesets.values():
 		tileset.set_meta(TILESET_MAIN_SOURCE_HASH_META, main_source_hash)

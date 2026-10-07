@@ -1,6 +1,7 @@
 @tool
 
 const DebugTime = preload("time-util.gd")
+const ImportContext = preload("../import-context.gd")
 
 enum LDTK_VERSION {
 	FUTURE,
@@ -15,6 +16,9 @@ static var file_version = LDTK_VERSION.UNSUPPORTED
 
 # Stores import flags (used throughout the importer)
 static var options := {}
+
+# Present only while a single LDtk import is running.
+static var import_context: ImportContext
 
 static func parse_file(source_file: String) -> Dictionary:
 	var json := FileAccess.open(source_file, FileAccess.READ)

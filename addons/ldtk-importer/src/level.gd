@@ -60,9 +60,13 @@ static func build_levels(
 
 		if (Util.options.entities_post_import):
 			level = PostImport.run_entity_post_import(level, Util.options.entities_post_import)
+			if Util.import_context.error != OK:
+				return []
 
 		if (Util.options.level_post_import):
 			level = PostImport.run_level_post_import(level, Util.options.level_post_import)
+			if Util.import_context.error != OK:
+				return []
 
 		levels.append(level)
 

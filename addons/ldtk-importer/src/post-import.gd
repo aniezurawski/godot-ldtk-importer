@@ -7,24 +7,29 @@ static func run(
 		script_path: String,
 		generated_import_paths: Array[String]
 	) -> Variant:
+	var original_element: Variant = element
 	var element_type = typeof(element)
+	if Util.import_context.error != OK:
+		return original_element
 
 	if not script_path.is_empty():
 		var script = load(script_path)
 		if not script or not script is GDScript:
-			printerr("Post-Import: '%s' is not a GDScript" % [script_path])
-			return ERR_INVALID_PARAMETER
+			Util.import_context.fail(ERR_INVALID_PARAMETER, "Post-Import: '%s' is not a GDScript" % script_path)
+			return original_element
 
 		script = script.new()
 		if not script.has_method("post_import"):
-			printerr("Post-Import: '%s' does not have a post_import() method" % [script_path])
-			return ERR_INVALID_PARAMETER
+			Util.import_context.fail(ERR_INVALID_PARAMETER, "Post-Import: '%s' does not have a post_import() method" % script_path)
+			return original_element
 
 		element = script.post_import(element)
+		if Util.import_context.error != OK:
+			return original_element
 
 		if element == null or typeof(element) != element_type:
-			printerr("Post-Import: Invalid scene returned from script.")
-			return ERR_INVALID_DATA
+			Util.import_context.fail(ERR_INVALID_DATA, "Post-Import: Invalid result from '%s'." % script_path)
+			return original_element
 
 		if script.has_method("get_generated_import_paths"):
 			var new_paths: Array[String] = script.get_generated_import_paths()
@@ -52,6 +57,8 @@ static func run_entity_post_import(level: LDTKLevel, script_path: String) -> LDT
 	Util.timer_start(Util.DebugTime.POST_IMPORT)
 	var layers = level.get_children()
 	for layer in layers:
+		if Util.import_context.error != OK:
+			break
 		if layer is not LDTKEntityLayer:
 			continue
 

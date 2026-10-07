@@ -129,6 +129,99 @@ func post_import(world: LDTKWorld) -> LDTKWorld:
     return world
 ```
 
+### Shared import helpers
+
+Every hook invocation has a new script instance. Use `Util.import_context` to
+share expensive helpers across all tileset, entity, level, and world hooks in
+one import, including all worlds in a multi-world project:
+
+```gdscript
+const Util = preload("res://addons/ldtk-importer/src/util/util.gd")
+const Registry = preload("res://my_entity_registry.gd")
+
+func post_import(entity_layer: LDTKEntityLayer) -> LDTKEntityLayer:
+    var context = Util.import_context
+    var path = "res://ldtk/entity_ids.json"
+    var registry = context.get_or_create(path, Registry.load_or_create.bind(path))
+    if context.error != OK:
+        return entity_layer
+
+    # Use the shared registry. Allocate any new IDs in a stable IID order.
+    if registry.is_dirty:
+        context.save_on_success(path, registry.save)
+    return entity_layer
+```
+
+`get_or_create(key, factory)` accepts arbitrary values and invokes the factory
+once per key. Cached dictionaries, arrays, and helper objects are shared by
+reference. Keys should be namespaced strings or consistent full file paths.
+`save_on_success(key, saver)` deduplicates saves by key: the first callback wins.
+Savers take no arguments, return `Error`, and run in sorted key order after the
+import body succeeds. Register a saver only when its data changes; savers must
+not register further saves. Call `context.fail(error, message)` to abort an
+import from a helper or hook. A non-OK return from a saver also fails the import.
+
+The context is created before `world_parsed` is emitted and cleared on both
+success and failure. Do not retain it or use it outside a synchronous import.
+Existing `post_import(element)` signatures remain unchanged. Hook validation
+failures discard pending saves; script runtime errors should be avoided or
+reported explicitly through `context.fail()`.
+
+Helper files are owned and modified by the importer. Scene reuse uses the LDtk
+source and level hashes. Registry updates should preserve existing IID-to-ID
+assignments, so adding entries keeps IDs in reused levels valid.
+
+Keep persistent helpers in your Git repository, outside `.godot`, and do not
+report them through `get_generated_import_paths()`. The files survive imports;
+only the in-memory cache expires. Deferred saves are not a transaction across
+all output files: if a later saver fails, earlier saves may already be written.
+An import leaves a `.pending` marker beside its import cache until both the
+import body and deferred saves succeed. If this marker exists on the next attempt,
+tileset and level reuse are bypassed, including after an editor restart. Tileset
+rebuilding preserves manual edits through the normal rebuild path.
+The importer verifies that the marker exists after closing it before starting
+the import body. Failed imports retain their cache files; the marker prevents reuse.
+
+### JSON helper files
+
+The optional `ImportJson` adapter parses each file once and schedules at most
+one write per import:
+
+```gdscript
+const Util = preload("res://addons/ldtk-importer/src/util/util.gd")
+const ImportJson = preload("res://addons/ldtk-importer/src/import-json.gd")
+
+func post_import(entity_layer: LDTKEntityLayer) -> LDTKEntityLayer:
+    var context = Util.import_context
+    var settings = ImportJson.get_or_create(context, "res://ldtk/import_settings.json", {})
+    if context.error != OK:
+        return entity_layer
+
+    # Read or modify this shared dictionary from any hook.
+    if not settings.has("schema_version"):
+        settings["schema_version"] = "1"
+        ImportJson.save_on_success(context, "res://ldtk/import_settings.json", settings)
+    return entity_layer
+```
+
+The adapter normalizes full `res://`, `user://`, or absolute filesystem paths;
+relative paths fail the import.
+Defaults are copied for missing files; malformed or unreadable JSON fails the
+import. JSON roots may be objects, arrays, or scalar values. For scalars, register
+the final replacement value once. Saves use sorted keys, skip identical file
+contents, and replace each file through a hidden temporary sibling. The temporary
+file is closed and its UTF-8 bytes are verified before replacing the original;
+failed verification leaves the original intact and fails the import. The target
+directory must already exist.
+
+Godot's [JSON parser](https://docs.godotengine.org/en/stable/classes/class_json.html)
+reads numbers as floating-point values. Store persistent integer IDs as decimal
+strings to preserve their full range, then validate and convert them in your
+registry helper. ID allocation belongs to that helper: preserve existing
+assignments, retain deleted entities' IDs, and allocate new IDs from a sorted
+list of all new IIDs before hooks consume them. Hook order must not determine
+gameplay IDs.
+
 # ❓FAQ
 
 ## How do I add tileset collisions?

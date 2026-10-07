@@ -189,6 +189,20 @@ func _import(
 		platform_variants: Array[String],
 		gen_files: Array[String]
 ) -> Error:
+	if Util.import_context != null:
+		push_error("An LDtk import is already running.")
+		return ERR_BUSY
+
+	# An unfinished import may have saved resources without their helper data.
+	var pending_path := save_path + ".pending"
+	var allow_cache_reuse := not FileAccess.file_exists(pending_path)
+	var pending_file := FileAccess.open(pending_path, FileAccess.WRITE)
+	if pending_file == null:
+		return FileAccess.get_open_error()
+	pending_file.close()
+	# Safe-save installs the final filename on close, and that rename can fail.
+	if not FileAccess.file_exists(pending_path):
+		return ERR_FILE_CANT_WRITE
 
 	Util.timer_reset()
 	Util.timer_start(Util.DebugTime.TOTAL)
@@ -196,6 +210,37 @@ func _import(
 
 	# Add options to static var in "Util", accessible from any script.
 	Util.options = options
+	var context := Util.ImportContext.new()
+	Util.import_context = context
+	var err := _import_impl(source_file, save_path, options, platform_variants, gen_files, allow_cache_reuse)
+	if err == OK:
+		err = context.flush()
+	if err == OK:
+		err = DirAccess.remove_absolute(pending_path)
+	context.clear()
+	Util.import_context = null
+	Util.clean_references()
+	Util.clean_resolvers()
+	if err == OK:
+		if Util.options.verbose_output: Util.print("block", "Results")
+
+		Util.timer_finish("Completed.")
+
+		var total_time: int = Util.DebugTime.get_total_time()
+		var result_message: String = Util.DebugTime.get_result()
+
+		if Util.options.verbose_output: Util.print("item_info", result_message)
+		Util.print("import_finish", str(total_time))
+	return err
+
+func _import_impl(
+		source_file: String,
+		save_path: String,
+		options: Dictionary,
+		platform_variants: Array[String],
+		gen_files: Array[String],
+		allow_cache_reuse: bool
+) -> Error:
 
 	# Parse source_file
 	var base_dir := source_file.get_base_dir() + "/"
@@ -216,6 +261,8 @@ func _import(
 	else:
 		return ERR_PARSE_ERROR
 	world_parsed.emit(source_file, world_data)
+	if Util.import_context.error != OK:
+		return Util.import_context.error
 
 	Util.timer_start(Util.DebugTime.GENERAL)
 	var definitions := DefinitionUtil.build_definitions(world_data)
@@ -228,8 +275,11 @@ func _import(
 		definitions,
 		base_dir,
 		tileset_overrides,
-		main_source_hash
+		main_source_hash,
+		allow_cache_reuse
 	)
+	if Util.import_context.error != OK:
+		return Util.import_context.error
 	gen_files.append_array(tileset_paths)
 
 	# Fetch EntityDef Tile textures
@@ -248,6 +298,8 @@ func _import(
 			var world_instance_name: String = world_instance.identifier
 			var world_instance_iid: String = world_instance.iid
 			var levels := Level.build_levels(world_instance, definitions, base_dir, external_levels)
+			if Util.import_context.error != OK:
+				return Util.import_context.error
 			var world_node := World.create_world(
 				world_instance_name,
 				world_instance_iid,
@@ -255,6 +307,8 @@ func _import(
 				base_dir,
 				generated_import_paths
 			)
+			if Util.import_context.error != OK:
+				return Util.import_context.error
 			world_nodes.append(world_node)
 
 		world = World.create_multi_world(world_name, world_iid, world_nodes)
@@ -265,7 +319,7 @@ func _import(
 		var level_hashes := get_level_hashes(world_data, base_dir, external_levels)
 		var previous_level_hashes: Dictionary = import_cache.level_hashes
 		var can_reuse_levels: bool = (
-			skip_unchanged_levels
+			allow_cache_reuse and skip_unchanged_levels
 			and import_cache.main_source_hash == main_source_hash
 		)
 		var reusable_level_hashes: Dictionary = previous_level_hashes if can_reuse_levels else {}
@@ -286,6 +340,8 @@ func _import(
 			external_levels,
 			reused_levels
 		)
+		if Util.import_context.error != OK:
+			return Util.import_context.error
 
 		# Save Levels (after Level Post-Import)
 		if (Util.options.pack_levels):
@@ -309,7 +365,6 @@ func _import(
 					main_source_hash,
 					level_hashes
 				)
-				gen_files.append(import_cache_path)
 
 			if (Util.options.verbose_output): Util.print("block", "Save World")
 			world = World.create_world(
@@ -331,6 +386,8 @@ func _import(
 
 			Util.handle_references()
 
+	if Util.import_context.error != OK:
+		return Util.import_context.error
 	for generated_path in generated_import_paths:
 		var generated_import_error := append_import_external_resource(generated_path)
 		if generated_import_error != OK:
@@ -347,16 +404,6 @@ func _import(
 	Util.timer_start(Util.DebugTime.SAVE)
 	var err = save_world(world, save_path, gen_files)
 	Util.timer_finish("World Saved", 1)
-
-	if Util.options.verbose_output: Util.print("block", "Results")
-
-	Util.timer_finish("Completed.")
-
-	var total_time: int = Util.DebugTime.get_total_time()
-	var result_message: String = Util.DebugTime.get_result()
-
-	if Util.options.verbose_output: Util.print("item_info", result_message)
-	Util.print("import_finish", str(total_time))
 
 	return err
 
